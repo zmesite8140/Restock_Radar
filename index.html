@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Restock Radar</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCI3efJA32VAYA2uxU_HTVWWj_HrIAh8A4&libraries=places"></script>
+  <style>
+    #map { height: 300px; max-width: 800px; margin: 0 auto; border-radius: 1rem; border: 1px solid #ccc; }
+    .leaflet-popup-content-wrapper { border-radius: 8px; }
+    .leaflet-popup-tip { background: #fff; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    .glass-bg {
+      background: rgba(255, 255, 255, 0.8);
+      backdrop-filter: blur(10px);
+    }
+    .dark .glass-bg {
+      background: rgba(30, 41, 59, 0.8);
+      color: #fff;
+    }
+    .store-icon {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 2px solid black;
+    }
+    .filter-btn {
+      padding: 0.5rem 1rem;
+      margin: 0.25rem;
+      border-radius: 9999px;
+      border: 1px solid #ccc;
+      cursor: pointer;
+    }
+    .filter-btn.active {
+      background-color: #3B82F6;
+      color: white;
+      border-color: #3B82F6;
+    }
+  </style>
+</head>
+<body class="bg-gradient-to-b from-gray-100 to-white min-h-screen dark:bg-gray-900 dark:text-white">
+  <div id="root"></div>
+  <script type="text/javascript">
+    const { useState, useEffect, useRef } = React;
+
+    const storeTypes = ["Walmart", "Target", "Costco", "BJ's", "Barnes & Noble", "GameStop", "Sam's Club", "Dollar General"];
+
+    const storeColors = {
+      "Walmart": "#3B82F6",
+      "Target": "#EF4444",
+      "Costco": "#D97706",
+      "BJ's": "#16A34A",
+      "Barnes & Noble": "#22C55E",
+      "GameStop": "#2563EB",
+      "Sam's Club": "#0F766E",
+      "Dollar General": "#FBBF24"
+    };
+
+    function App() {
+      const [restocks, setRestocks] = useState(() => {
+        const saved = localStorage.getItem("restocks");
+        return saved ? JSON.parse(saved) : [];
+      });
+
+      const [formData, setFormData] = useState({
+        storeType: "Walmart",
+        selectedLatLng: null,
+        day: "Wednesday",
+        time: "10:00"
+      });
+      const [selectedStoreType, setSelectedStoreType] = useState("Walmart");
+      const [storeData, setStoreData] = useState([]);
+      const mapRef = useRef(null);
+      const storePinsRef = useRef([]);
+      const restockPinsRef = useRef([]);
+
+      useEffect(() => {
+        const map = L.map("map").setView([41.6, -72.7], 9);
+        mapRef.current = map;
+
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "© OpenStreetMap contributors"
+        }).addTo(map);
+
+        const fetchAllStores = async () => {
+          const allLocations = [];
+          for (const type of storeTypes) {
+            await new Promise(resolve => {
+              const service = new google.maps.places.PlacesService(document.createElement('div'));
+              const request = {
+                query: `${type} in Connecticut`,
+                fields: ["name", "geometry"],
+              };
+              service.textSearch(request, (results, status) => {
+                if (status === google.maps.places.PlacesServiceStatus.OK && results) {
+                  const locations = results.map(place => ({
+                    name: type,
+                    lat: place.geometry.location.lat(),
+                    lng: place.geometry.location.lng()
+                  }));
+                  allLocations.push(...locations);
+                }
+                resolve();
+              });
+            });
+          }
+          setStoreData(allLocations);
+        };
+
+        fetchAllStores();
+
+        return () => {
+          if (map) map.remove();
+        };
+      }, []);
+
+      useEffect(() => {
+        renderStoreMarkers(selectedStoreType);
+      }, [storeData, selectedStoreType]);
+
+      useEffect(() => {
+        restockPinsRef.current.forEach(pin => mapRef.current.removeLayer(pin));
+        restockPinsRef.current = [];
+
+        restocks.forEach(restock => {
+          const marker = L.circleMarker([restock.lat, restock.lng], {
+            radius: 10,
+            color: "#000",
+            fillColor: storeColors[restock.storeType] || "#FFCC00",
+            fillOpacity: 0.95
+          })
+            .addTo(mapRef.current)
+            .bindPopup(`${restock.storeType} – ${restock.day} @ ${restock.time}`);
+
+          restockPinsRef.current.push(marker);
+        });
+      }, [restocks]);
+
+      function renderStoreMarkers(type) {
+        storePinsRef.current.forEach(p => mapRef.current.removeLayer(p.marker));
+        storePinsRef.current = [];
+
+        storeData.filter(store => store.name === type).forEach((store) => {
+          const icon = L.divIcon({
+            className: '',
+            html: `<div class="store-icon" style="background:${storeColors[store.name]}"></div>`
+          });
+
+          const marker = L.marker([store.lat, store.lng], { icon })
+            .bindPopup(`${store.name}`);
+
+          marker.on("click", () => {
+            setFormData(prev => ({ ...prev, storeType: store.name, selectedLatLng: { lat: store.lat, lng: store.lng } }));
+          });
+
+          marker.addTo(mapRef.current);
+          storePinsRef.current.push({ marker, store });
+        });
+      }
+
+      const handleInputChange = (e) => {
+        setFormData({ ...formData, [e.target.name]: e.target.value });
+      };
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!formData.selectedLatLng) {
+          alert("Please click a store on the map first.");
+          return;
+        }
+
+        let town = "Unknown town";
+        try {
+          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${formData.selectedLatLng.lat}&lon=${formData.selectedLatLng.lng}&format=json`);
+          const data = await response.json();
+          town = data.address.town || data.address.city || data.address.village || data.address.hamlet || "Unknown town";
+        } catch (err) {
+          console.error("Reverse geocoding failed:", err);
+        }
+
+        const newRestock = {
+          id: Date.now(),
+          storeType: formData.storeType,
+          day: formData.day,
+          time: formData.time,
+          lat: formData.selectedLatLng.lat,
+          lng: formData.selectedLatLng.lng,
+          town
+        };
+
+        const updated = [newRestock, ...restocks];
+        setRestocks(updated);
+        localStorage.setItem("restocks", JSON.stringify(updated));
+        setFormData(prev => ({ ...prev, selectedLatLng: null }));
+      };
+
+      const handleExport = () => {
+        const csvContent = "data:text/csv;charset=utf-8," +
+          ["Store,Day,Time,Town,Latitude,Longitude"].concat(
+            restocks.map(r => `${r.storeType},${r.day},${r.time},${r.town || ''},${r.lat},${r.lng}`)
+          ).join("\n");
+
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", "restocks.csv");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      };
+
+      const handleClear = () => {
+        setRestocks([]);
+        localStorage.removeItem("restocks");
+        restockPinsRef.current.forEach(pin => mapRef.current.removeLayer(pin));
+        restockPinsRef.current = [];
+      };
+
+      const handleFilterChange = (type) => {
+        setSelectedStoreType(type);
+        renderStoreMarkers(type);
+      };
+
+      return React.createElement("div", { className: "max-w-4xl mx-auto px-4 py-8" },
+        React.createElement("h1", { className: "text-4xl font-extrabold text-center mb-6" }, "\ud83d\udce6 Restock Radar"),
+        React.createElement("div", { className: "flex justify-center mb-4 flex-wrap" },
+          storeTypes.map(type =>
+            React.createElement("button", {
+              key: type,
+              className: `filter-btn ${selectedStoreType === type ? 'active' : ''}`,
+              onClick: () => handleFilterChange(type)
+            }, type)
+          )
+        ),
+        React.createElement("div", { id: "map", className: "mb-6 shadow-2xl" }),
+        React.createElement("form", { onSubmit: handleSubmit, className: "glass-bg p-6 rounded-xl shadow-lg" },
+          React.createElement("h2", { className: "text-xl font-bold mb-4" }, "Submit a Restock"),
+          React.createElement("div", { className: "mb-4" },
+            React.createElement("label", { className: "block text-sm font-medium" }, "Day"),
+            React.createElement("select", {
+              name: "day",
+              value: formData.day,
+              onChange: handleInputChange,
+              className: "w-full mt-1 p-3 border rounded-lg"
+            },
+              ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map(day =>
+                React.createElement("option", { key: day, value: day }, day)
+              )
+            )
+          ),
+          React.createElement("div", { className: "mb-4" },
+            React.createElement("label", { className: "block text-sm font-medium" }, "Time"),
+            React.createElement("input", {
+              type: "time",
+              name: "time",
+              value: formData.time,
+              onChange: handleInputChange,
+              className: "w-full mt-1 p-3 border rounded-lg"
+            })
+          ),
+          React.createElement("button", {
+            type: "submit",
+            className: "w-full bg-yellow-400 text-red-700 font-bold p-3 rounded-full hover:bg-yellow-500 transition"
+          }, "\ud83d\udccd Submit Restock")
+        ),
+        React.createElement("div", { className: "glass-bg p-6 rounded-xl shadow-lg mt-6" },
+          React.createElement("h2", { className: "text-xl font-bold mb-3" }, "Recent Restocks"),
+          React.createElement("div", { className: "mb-4 flex gap-2" },
+            React.createElement("button", {
+              onClick: handleExport,
+              className: "bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+            }, "Export as CSV"),
+            React.createElement("button", {
+              onClick: handleClear,
+              className: "bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
+            }, "Clear Map")
+          ),
+          restocks.length === 0
+            ? React.createElement("p", null, "No restocks reported yet.")
+            : React.createElement("ul", { className: "divide-y divide-gray-200 max-h-64 overflow-y-auto" },
+              restocks.map(restock =>
+                React.createElement("li", {
+                  key: restock.id,
+                  className: "py-3 cursor-pointer hover:bg-gray-100 px-2 rounded",
+                  onClick: () => mapRef.current.setView([restock.lat, restock.lng], 12)
+                }, `${restock.storeType} – ${restock.day} at ${restock.time} in ${restock.town || 'Unknown town'}`)
+              )
+            )
+        )
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
